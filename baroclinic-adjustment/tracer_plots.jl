@@ -20,7 +20,7 @@ function vis_evol(dir; integrals=true, error=true, only_depth_tracer=false)
         title = "Tracer $ylabel"
     end
     
-    ax = Axis(fig[1, 1], xlabel="Time (days)", ylabel=ylabel, title=title)
+    ax = Axis(fig[1, 1], xlabel="Time (days)", ylabel="", title=title)
 
     for zcoord in ["zstar", "z"]
         for resolution in ["8", "16"]
@@ -64,8 +64,7 @@ function vis_evol(dir; integrals=true, error=true, only_depth_tracer=false)
     return fig
 end
 
-dir = "/pscratch/sd/n/nloose/GB-25/baroclinic-adjustment/"
-
-fig = vis_evol(dir; integrals=true, error=true)
-fig = vis_evol(dir; integrals=true, error=false)
-fig = vis_evol(dir; integrals=true, error=false, only_depth_tracer=true)
+#dir = "/pscratch/sd/n/nloose/GB-25/baroclinic-adjustment/"
+#fig = vis_evol(dir; integrals=true, error=true)
+#fig = vis_evol(dir; integrals=true, error=false)
+#fig = vis_evol(dir; integrals=true, error=false, only_depth_tracer=true)
