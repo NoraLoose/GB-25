@@ -7,16 +7,17 @@ using Printf
 
 # input params
 params = Dict(
-    "precis" => "Float64", # Float64, Float32
+    "precis" => "Float32", # Float64, Float32
     "resol"  => "1//8",    # 1//8, 1//16
-    "zcoord" => "z"    # zstar, z
+    "zcoord" => "zstar",   # zstar, z
+    "tracer_release_method"   => "forcing"  # forcing, init
 )
 target_dir = "/pscratch/sd/n/nloose/GB-25/baroclinic-adjustment/" # change to where you want save stuff 
 
 precision = eval(Meta.parse(params["precis"]))
 resolution = eval(Meta.parse(params["resol"]))
 
-prefix = joinpath(target_dir, "baroclinic_adjustment_$(params["zcoord"])_$(Base.Int(1 // resolution))_$(precision)")
+prefix = joinpath(target_dir, "baroclinic_adjustment_$(params["zcoord"])_$(Base.Int(1 // resolution))_$(precision)_$(params["tracer_release_method"])")
 
 # Set default floating point type
 Oceananigans.defaults.FloatType = precision
@@ -32,12 +33,12 @@ N² = 4e-6  # [s⁻²] buoyancy frequency / stratification
 
 if params["zcoord"] == "zstar"
     z = Oceananigans.Grids.MutableVerticalDiscretization((-Lz, 0))
+    vertical_coordinate = Oceananigans.Models.HydrostaticFreeSurfaceModels.ZStar()
 else
     z = (-Lz, 0)
+    vertical_coordinate = Oceananigans.Models.HydrostaticFreeSurfaceModels.ZCoordinate()
 end
 closure = VerticalScalarDiffusivity(precision; κ=1e-5, ν=1e-4)
-
-stop_time = 300days
 
 @info "Nx, Ny, Nz = $Ny, $Ny, $Nz"
 
@@ -54,24 +55,30 @@ dx = minimum_xspacing(grid)
 Δt = 0.15 * dx / 2 # c * dx / max(U)
 
 # Tracer forcing
-
-# Define delta function for tracer release
 i0 = Base.Int(Ny / 2)
 j0 = Base.Int(Ny / 2)
-t0 = 5days - Δt
-tf = t0 + Δt
-@inline t_unforced(t, t0, tf) = (t < t0) | (t >= tf)
-@inline i_unforced(i, i0) = (i < i0) | (i > i0)
-@inline j_unforced(j, j0) = (j < j0) | (j > j0)
-@inline k_unforced(k, k0) = (k < k0) | (k > k0)
-@inline unforced(i, j, k, t, p) = t_unforced(t, p.t0, p.tf) | i_unforced(i, p.i0) | j_unforced(j, p.j0) | k_unforced(k, p.k0)
-@inline forcing(i, j, k, grid, clock, fields, p) = ifelse(unforced(i, j, k, clock.time, p), zero(grid), one(grid))
 
-# release at the surface
-c1_forcing = Forcing(forcing, discrete_form=true, parameters=(; i0=i0, j0=j0, k0=Nz, t0=t0, tf=tf))
-# release at the bottom
-c2_forcing = Forcing(forcing, discrete_form=true, parameters=(; i0=i0, j0=j0, k0=1, t0=t0, tf=tf))
-
+if params["tracer_release_method"] == "forcing"
+    stop_time = 730days
+    
+    # Define delta function for tracer release
+    t0 = 365days - Δt
+    tf = t0 + Δt
+    @inline t_unforced(t, t0, tf) = (t < t0) | (t >= tf)
+    @inline i_unforced(i, i0) = (i < i0) | (i > i0)
+    @inline j_unforced(j, j0) = (j < j0) | (j > j0)
+    @inline k_unforced(k, k0) = (k < k0) | (k > k0)
+    @inline unforced(i, j, k, t, p) = t_unforced(t, p.t0, p.tf) | i_unforced(i, p.i0) | j_unforced(j, p.j0) | k_unforced(k, p.k0)
+    @inline forcing(i, j, k, grid, clock, fields, p) = ifelse(unforced(i, j, k, clock.time, p), zero(grid), one(grid))
+    
+    # release at the surface
+    c1_forcing = Forcing(forcing, discrete_form=true, parameters=(; i0=i0, j0=j0, k0=Nz, t0=t0, tf=tf))
+    # release at the bottom
+    c2_forcing = Forcing(forcing, discrete_form=true, parameters=(; i0=i0, j0=j0, k0=1, t0=t0, tf=tf))
+else
+    c1_forcing = nothing
+    c2_forcing = nothing
+end
 
 # Model
 model = HydrostaticFreeSurfaceModel(; grid, closure,
@@ -80,7 +87,26 @@ model = HydrostaticFreeSurfaceModel(; grid, closure,
                                     tracers = (:b, :c1, :c2),
                                     forcing = (; c1=c1_forcing, c2=c2_forcing),
                                     momentum_advection = WENOVectorInvariant(),
-                                    tracer_advection = WENO(order=7))
+                                    tracer_advection = WENO(order=7),
+                                    vertical_coordinate = vertical_coordinate
+)
+
+# Tracer initialization
+if params["tracer_release_method"] == "init"
+    stop_time = 365days
+    # index of tracer release        
+
+    c1_initial = interior(model.tracers.c1)
+    c2_initial = interior(model.tracers.c2)   
+    
+    # use allowscalar to mutate an index of array on a GPU
+    @allowscalar c1_initial[i0, j0, Nz] = 1
+    @allowscalar c2_initial[i0, j0, 1] = 1
+    
+    # set the initial tracer concentration 
+    set!(model, c1 = c1_initial)
+    set!(model, c2 = c2_initial)
+end
 
 # Parameters
 parameters = (; N², Δb, φ₀, Δφ = 20)
@@ -125,7 +151,7 @@ e = @at (Center, Center, Center) (u^2 + v^2) / 2
 E = Average(e, dims=(1, 2, 3))
 ke_ow = JLD2OutputWriter(model, (; E),
                          filename = prefix * "_kinetic_energy.jld2",
-                         schedule = TimeInterval(1days),
+                         schedule = AveragedTimeInterval(1days; window=1days, stride=1),
                          overwrite_existing = true)
 simulation.output_writers[:ke] = ke_ow
 
@@ -137,7 +163,7 @@ c1_int = Integral(c1)
 c2_int = Integral(c2)
 c_ow = JLD2OutputWriter(model, (; c1_avg, c2_avg, c1_int, c2_int),
                          filename = prefix * "_tracers.jld2",
-                         schedule = TimeInterval(1days),
+                         schedule = AveragedTimeInterval(1days; window=1days, stride=1),
                          overwrite_existing = true)
 simulation.output_writers[:c] = c_ow
 
@@ -147,8 +173,9 @@ b = model.tracers.b
 fields = (; u, v, w, b, ζ, c1, c2)
 f_ow = JLD2OutputWriter(model, fields,
                         filename = prefix * "_fields.jld2",
-                        indices = (:, :, Nz),
-                        schedule = TimeInterval(10days),
+                        indices = (:, :, :),
+                        
+                        schedule = AveragedTimeInterval(1days; window=1days, stride=1),
                         overwrite_existing = true)
 
 simulation.output_writers[:fields] = f_ow
