@@ -31,6 +31,8 @@ N² = 4e-6  # [s⁻²] buoyancy frequency / stratification
 Δb = 0.005 # [m/s²] buoyancy difference
 φ₀ = 50
 
+stop_time = 730days
+
 if params["zcoord"] == "zstar"
     z = Oceananigans.Grids.MutableVerticalDiscretization((-Lz, 0))
     vertical_coordinate = Oceananigans.Models.HydrostaticFreeSurfaceModels.ZStar()
@@ -59,7 +61,6 @@ i0 = Base.Int(Ny / 2)
 j0 = Base.Int(Ny / 2)
 
 if params["tracer_release_method"] == "forcing"
-    stop_time = 730days
     
     # Define delta function for tracer release
     t0 = 365days - Δt
@@ -93,9 +94,7 @@ model = HydrostaticFreeSurfaceModel(; grid, closure,
 
 # Tracer initialization
 if params["tracer_release_method"] == "init"
-    stop_time = 365days
-    # index of tracer release        
-
+    
     c1_initial = interior(model.tracers.c1)
     c2_initial = interior(model.tracers.c2)   
     
@@ -152,20 +151,29 @@ E = Average(e, dims=(1, 2, 3))
 ke_ow = JLD2OutputWriter(model, (; E),
                          filename = prefix * "_kinetic_energy.jld2",
                          schedule = AveragedTimeInterval(1days; window=1days, stride=1),
-                         overwrite_existing = true)
+                         overwrite_existing = true,
+                         array_type = Array{precision})
 simulation.output_writers[:ke] = ke_ow
 
 c1 = model.tracers.c1
 c2 = model.tracers.c2
-c1_avg = Average(c1, dims=(1, 2, 3))
-c2_avg = Average(c2, dims=(1, 2, 3))
 c1_int = Integral(c1)
 c2_int = Integral(c2)
-c_ow = JLD2OutputWriter(model, (; c1_avg, c2_avg, c1_int, c2_int),
+c_ow = JLD2OutputWriter(model, (; c1_int, c2_int),
                          filename = prefix * "_tracers.jld2",
                          schedule = AveragedTimeInterval(1days; window=1days, stride=1),
-                         overwrite_existing = true)
+                         overwrite_existing = true,
+                        array_type = Array{precision})
 simulation.output_writers[:c] = c_ow
+
+c1_vert_int = Integral(c1, dims=(3))
+c2_vert_int = Integral(c2, dims=(3))
+c_vert_int_ow = JLD2OutputWriter(model, (; c1_vert_int, c2_vert_int),
+                         filename = prefix * "_tracers_vertical_integral.jld2",
+                         schedule = AveragedTimeInterval(1days; window=1days, stride=1),
+                         overwrite_existing = true,
+                         array_type = Array{precision})
+simulation.output_writers[:c_vert_int] = c_vert_int_ow
 
 Nz = size(grid, 3)
 b = model.tracers.b
@@ -174,11 +182,13 @@ fields = (; u, v, w, b, ζ, c1, c2)
 f_ow = JLD2OutputWriter(model, fields,
                         filename = prefix * "_fields.jld2",
                         indices = (:, :, :),
-                        
                         schedule = AveragedTimeInterval(1days; window=1days, stride=1),
-                        overwrite_existing = true)
+                        overwrite_existing = true,
+                        array_type = Array{precision})
 
 simulation.output_writers[:fields] = f_ow
+
+simulation.output_writers[:checkpointer] = Checkpointer(model; schedule=TimeInterval(100days), prefix= prefix * "_checkpoint")
 
 if arch isa ReactantState
     _run! = @compile run!(simulation)
