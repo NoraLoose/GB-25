@@ -2,12 +2,10 @@ using CairoMakie
 using Oceananigans
 using Printf
 
-function vis_evol(dir; integrals=true, error=true, only_depth_tracer=false)
-
-    t0 = 7 # end of tracer release in days + 1
+function vis_evol(dir; integrals=true, error=true, only_depth_tracer=false, t0=366)
 
     pt = 4 / 3
-    fig = Figure(; size=(600, 500), fontsize=12pt)
+    fig = Figure(; size=(900, 500), fontsize=12pt)
 
     if integrals
         ylabel = "Integral"
@@ -25,7 +23,7 @@ function vis_evol(dir; integrals=true, error=true, only_depth_tracer=false)
     for zcoord in ["zstar", "z"]
         for resolution in ["8", "16"]
             for precision in ["Float64", "Float32"]
-                filename = joinpath(dir, "baroclinic_adjustment_" * zcoord * "_" * resolution * "_" * precision * "_tracers.jld2")
+                filename = joinpath(dir, "baroclinic_adjustment_" * zcoord * "_" * resolution * "_" * precision * "_forcing_tracers.jld2")
                 
                 if isfile(filename)
                     if integrals
@@ -50,7 +48,7 @@ function vis_evol(dir; integrals=true, error=true, only_depth_tracer=false)
                         data2 = C2t.data[1, 1, 1, t0:end]    
                     end
 
-                                        if !only_depth_tracer
+                    if !only_depth_tracer
                         lines!(ax, times1, data1, linewidth=4, label=label1)
                     end
                     lines!(ax, times2, data2, linewidth=4, label=label2)
@@ -60,7 +58,7 @@ function vis_evol(dir; integrals=true, error=true, only_depth_tracer=false)
     end
 
     # Add legend
-    axislegend(ax, position=:lb)
+    legend = Legend(fig[1, 2], ax, orientation=:vertical)  # One column
     return fig
 end
 
